@@ -23,7 +23,7 @@ from collections import Counter
 
 import pytest
 
-from hypothesis import given, strategies as st
+from hypothesis import assume, given, strategies as st
 
 
 ##############################################################################
@@ -44,7 +44,12 @@ def sort_a_list(lst):
     # TODO: After fixing the tests, fix this function.
     #       You may use a builtin function  OR write
     #       a sort function yourself.
-    return lst[::-1]
+
+    # Simple selection sort.
+    for i in range(len(lst)-1):
+        min_index = lst[i:].index(min(lst[i:])) + i
+        lst[i], lst[min_index] = lst[min_index], lst[i]
+    return lst
 
 
 def test_sort_a_list_basic():
@@ -55,6 +60,7 @@ def test_sort_a_list_basic():
     assert sort_a_list([1, 1]) == [1, 1]
     assert sort_a_list([3, 2, 1]) == [1, 2, 3]
     # add an assertion here
+    assert sort_a_list([1, 3, 2]) == [1, 2, 3]
 
 
 @pytest.mark.parametrize(
@@ -63,8 +69,9 @@ def test_sort_a_list_basic():
         [],
         [1],
         [1, 1],
-        [3, 2, 1]
+        [3, 2, 1],
         # add an example case here
+        [1, 3, 2]
     ),
 )
 def test_sort_a_list_parametrize(lst):
@@ -89,6 +96,8 @@ def test_sort_a_list_hypothesis(lst):
     new = sort_a_list(list(lst))
     assert Counter(lst) == Counter(new)  # sorted list must have same elements
     # TODO: assert that the list is in correct order
+    for i in range(len(new)-1):
+        assert new[i] <= new[i+1]
 
 
 """
@@ -124,7 +133,7 @@ https://hypothesis.readthedocs.io/en/latest/data.html#hypothesis.strategies.list
 """
 
 
-@given(st.just([1, 2, 3]))  # update this search strategy to be more-general
+@given(st.lists(st.integers(min_value=1), min_size=2))  # update this search strategy to be more-general
 def test_sum_of_list_greater_than_max(lst):
     # TODO: *without* changing the test body, write the most general
     #       argument to @given that will pass for lists of integers.
@@ -190,10 +199,10 @@ def leftpad(string, width, fillchar):
     """
     assert isinstance(width, int) and width >= 0, width
     assert isinstance(fillchar, type(u"")) and len(fillchar) == 1, fillchar
-    return string  # Uh oh, we haven't padded this at all!
+    return fillchar*width + string
 
 
-@given(string=st.text(), width=st.just(0), fillchar=st.characters())
+@given(string=st.text(), width=st.integers(min_value=0, max_value=1000), fillchar=st.characters())
 def test_leftpad(string, width, fillchar):
     # TODO: allow any length from zero up to e.g. 1000 (capped for performance)
     padded = leftpad(string, width, fillchar)
@@ -202,6 +211,8 @@ def test_leftpad(string, width, fillchar):
     #       Avoid using redundant code/logic between your test
     #       and the function that you are writing - they may have
     #       the same bugs!
+    assert padded.startswith(fillchar*width)
+    assert padded.endswith(string)
 
 
 """
@@ -281,13 +292,13 @@ class Record(object):
 
         This is a *bad* method. This needs to be fixed
         """
-        value = string
+        value = json.loads(string)
         return cls(value)
 
 
 # We can define recursive strategies like so:
 json_strat = st.recursive(
-    st.none() | st.booleans() | st.integers() | st.floats() | st.text(),
+    st.none() | st.booleans() | st.integers() | st.floats(allow_nan=False) | st.text(),
     lambda substrat: st.lists(substrat) | st.dictionaries(st.text(), substrat),
 )
 
@@ -296,9 +307,11 @@ json_strat = st.recursive(
 # In this one-argument case, we could also use `json_strat.map(Record)`.
 @given(st.builds(Record, value=json_strat))
 def test_record_json_roundtrip(record):
+    assume(record == record)
     string = record.to_json()
     new = Record.from_json(string)
     # TODO: assert that the new and old records match
+    assert new == record
 
 
 # Extension option: imagine that we are sending serialised records to an
@@ -309,6 +322,18 @@ def test_record_json_roundtrip(record):
 #    2. Write a test that takes a record, converts it to json (string #1),
 #       back to a new record, and finally to json again.  Are these strings
 #       equal?  Would this have the same problem as test_record_json_roundtrip?
+@given(st.builds(Record, value=json_strat))
+def test_record_cache(record):
+    string1, string2 = record.to_json(), record.to_json()
+    assert string1 == string2
+
+
+@given(st.builds(Record, value=json_strat))
+def test_reserialize(record):
+    string1 = record.to_json()
+    new_rec = Record.from_json(string1)
+    string2 = new_rec.to_json()
+    assert string1 == string2
 
 
 """
