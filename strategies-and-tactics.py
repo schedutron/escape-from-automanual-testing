@@ -13,9 +13,9 @@ Key link:  https://hypothesis.readthedocs.io/en/latest/data.html
 import json
 
 import pytest
-
+import random
 import hypothesis
-from hypothesis import given, settings, strategies as st
+from hypothesis import given, settings, strategies as st, reproduce_failure
 
 
 ##############################################################################
@@ -23,15 +23,14 @@ from hypothesis import given, settings, strategies as st
 
 # Remove the mark.xfail decorator,
 # then improve the filter function to make the test pass.
-@pytest.mark.xfail
-@given(st.integers().filter(lambda x: True))
+
+@given(st.integers().filter(lambda x: x % 2 == 0))
 def test_filter_even_numbers(x):
     # If we convert any even integer to a string, the last digit will be even.
     assert str(x)[-1] in "02468"
 
 
-@pytest.mark.xfail
-@given(st.integers())
+@given(st.integers().filter(lambda x: x % 2 == 1))
 def test_filter_odd_numbers(x):
     # If we convert any odd integer to a string, the last digit will be odd.
     assert str(x)[-1] in "13579"
@@ -56,15 +55,13 @@ def test_filter_odd_numbers(x):
 # You'll need to change the value of the integer, then convert it to a string.
 
 
-@pytest.mark.xfail
-@given(st.integers())
+@given(st.integers().map(lambda x: str(2*x)))
 def test_map_even_numbers(x):
     # Check that last character of string x is a substring of "02468"
     assert x[-1] in "02468"
 
 
-@pytest.mark.xfail
-@given(st.integers())
+@given(st.integers().map(lambda x: str(2*x + 1)))
 def test_map_odd_numbers(x):
     assert x[-1] in "13579"
 
@@ -108,8 +105,14 @@ json_strat = st.deferred(
         st.none(),
         st.booleans(),
         # TODO: Write out the rest of this definition in Hypothesis strategies!
+        st.integers(),
+        st.floats(allow_nan=False),
+        st.text(),
+        st.lists(json_strat),
+        st.dictionaries(st.text(), json_strat)
     )
 )
+
 # If in doubt, you can copy-paste the definition of json_strat to an interactive
 # prompt, and use the `.example()` method of the strategy to see what kind of
 # data it generates.  Be warned though!  The distribution of `.example()`s is
@@ -120,6 +123,7 @@ json_strat = st.deferred(
 # or `pytest -s --hypothesis-verbosity=verbose`) to see what's going on,
 # or get a summary with the `hypothesis.event(message)` function and
 # `pytest --hypothesis-show-statistics ...`
+
 @given(json_strat)
 def test_json_dumps(value):
     """Checks that value is serialisable as JSON."""
@@ -162,8 +166,18 @@ def a_composite_strategy(draw):
        ([-1, -2, -3, 4], 3)
     """
     # TODO: draw a list, determine the allowed indices, and choose one to return
-    lst = []  # TODO: draw a list of integers here
-    index = None
+    lst = draw(st.lists(st.integers()))
+
+    indices = st.integers(min_value=0, max_value=max(0, len(lst)-1)).filter(lambda x: lst[x] > 0 if lst else False)
+    index = draw(indices) #.example()  # Doesn't work
+    '''
+    allowed_indices = []
+    for i, num in enumerate(lst):
+        if num > 0:
+            allowed_indices.append(i)
+    if allowed_indices:
+        index = random.choice(allowed_indices)
+    '''
     # TODO: determine the list of allowed indices, and choose one if non-empty
     return (lst, index)
 
@@ -191,7 +205,7 @@ def test_a_composite_strategy(value):
 # Note: you are not expected to finish this optional extension!
 
 # One really useful pattern for complex data is to infer a strategy from an
-# existing schema of some kind.  For example, Hypothesis ships with functions
+# existing schema of some kind. For example, Hypothesis ships with functions
 # for inference from types, regular expressions, Numpy dtypes, etc.
 #
 # This exercise is to write a function that, given a simple "json-schema",
@@ -202,10 +216,11 @@ def test_a_composite_strategy(value):
 #
 # Final tip: I suggest starting by adding any tests, then improving the
 # schema_strategy and check_schema functions, *then* strengthening the
-# validate and from_schema functions.  You might be surprised!
+# validate and from_schema functions. You might be surprised!
 
 
-SCHEMA_TYPES = ("null", "bool", "number", "string", "array")
+SCHEMA_TYPES = tuple(["null"]*3 + ["bool"]*3 + ["number"]*3 + ["string"]*3 + ["array"])
+print(SCHEMA_TYPES)
 
 
 def check_schema(schema):
@@ -218,11 +233,47 @@ def check_schema(schema):
     if type_ in ("null", "bool"):
         assert len(schema) == 1  # No other keys allowed
     # TODO: number: check maximum and minimum, no other keys
+    elif type_ == "number":
+        assert set(schema).issubset("type minimum maximum".split())
+        if "minimum" in schema:
+            minimum = schema["minimum"]
+            assert isinstance(minimum, float), type(minimum)
+        if "maximum" in schema:
+            maximum = schema["maximum"]
+            assert isinstance(maximum, float), type(maximum)
+        if "minimum" in schema and "maximum" in schema:
+            assert minimum <= maximum
+
     elif type_ == "string":
         assert set(schema).issubset("type minLength maxLength".split())
         # TODO: check the values of maxLength and minLength are positive
         # and correctly ordered - *if* the keys are present at all!
-    # TODO: array: check maxLength and minLength, items schema, no other keys
+        if "minLength" in schema:
+            minLength = schema["minLength"]
+            assert isinstance(minLength, int), type(minLength)
+            assert minLength >= 0, minLength
+        if "maxLength" in schema:
+            maxLength = schema["maxLength"]
+            assert isinstance(maxLength, int), type(maxLength)
+            assert maxLength >= 0, maxLength
+        if "minLength" in schema and "maxLength" in schema:
+            assert minLength <= maxLength
+    else:  # For arrays
+        # TODO: array: check maxLength and minLength, items schema, no other keys
+        assert "items_schema" in schema, schema
+        assert set(schema).issubset("type minLength maxLength items_schema".split())
+        if "minLength" in schema:
+            minLength = schema["minLength"]
+            assert isinstance(minLength, int), type(minLength)
+            assert minLength >= 0, minLength
+        if "maxLength" in schema:
+            maxLength = schema["maxLength"]
+            assert isinstance(maxLength, int), type(maxLength)
+            assert maxLength >= 0, maxLength
+        if "minLength" in schema and "maxLength" in schema:
+            assert minLength <= maxLength
+        check_schema(schema["items_schema"]), schema["items_schema"]
+            
     #       (bonus round: support uniqueItems for arrays with JSON round-trip)
 
 
@@ -234,37 +285,74 @@ def validate(schema, instance):
     if schema.get("type") == "bool":
         return isinstance(instance, bool)
     if schema.get("type") == "number":
-        return isinstance(instance, float) and schema.get(
-            "minimum", float("-inf")
-        ) <= instance <= schema.get("maximum", float("inf"))
+        return (
+            isinstance(instance, float) and schema.get(
+                "minimum", float("-inf")
+            ) <= instance <= schema.get("maximum", float("inf")))
     # TODO: complete length validation checks for string and array
     if schema.get("type") == "string":
-        return isinstance(instance, type(u""))
-    return isinstance(instance, list)
+        return isinstance(instance, type(u"")) and schema.get(
+            "minLength", 0
+        ) <= len(instance) <= schema.get("maxLength", float("inf"))
+    # For array:
+    return isinstance(instance, list) and schema.get(
+        "minLength", 0
+    ) <= len(instance) <= len(instance) <= schema.get("maxLength", float("inf"))
+    for ele in instance:
+        validate(schema["items_schema"], ele)
 
-
-def from_schema(schema):
+@st.composite
+def from_schema(draw, schema):
     """Returns a strategy for objects that match the given schema."""
     check_schema(schema)
     # TODO: actually handle constraints on number/string/array schemas
-    return dict(
-        null=st.none(),
-        bool=st.booleans(),
-        number=st.floats(allow_nan=False),
-        string=st.text(),
-        array=st.lists(st.nothing()),
-    )[schema["type"]]
+    type_ = schema["type"]
+    if type_ == "null":
+        return draw(st.none())
+    if type_ == "bool":
+        return draw(st.booleans())
+    if type_ == "number":
+        return draw(st.floats(
+            allow_nan=False, min_value=schema.get("minimum"), max_value=schema.get("maximum")))
+    if type_ == "string":
+        return draw(st.text(min_size=schema.get("minLength"), max_size=schema.get("maxLength")))
+    # For arrays:
+    return draw(
+        st.lists(
+            from_schema(schema["items_schema"]),
+            min_size=schema.get("minLength"),
+            max_size=schema.get("maxLength")
+            )
+        )
 
 
 # `@st.composite` is one way to write this - another would be to define a
 # bare function, and `return st.one_of(st.none(), st.booleans(), ...)` so
-# each strategy can be defined individually.  Use whichever seems more
+# each strategy can be defined individually. Use whichever seems more
 # natural to you - the important thing in tests is usually readability!
 @st.composite
 def schema_strategy(draw):
     schema = {"type": draw(st.sampled_from(SCHEMA_TYPES))}
     # TODO: generate constraints on number/string/array schemas
     # (hint: can you design this so they shrink to less constrained?)
+    if schema["type"] in ("null", "bool"):
+        pass
+    elif schema["type"] == "number":
+        if random.getrandbits(1):
+            schema["minimum"] = draw(st.floats(allow_nan=False))
+        if random.getrandbits(1):
+            schema["maximum"] = draw(st.floats(min_value=schema.get("minimum")))
+    elif schema["type"] == "string":
+        if random.getrandbits(1):
+            schema["minLength"] = draw(st.integers(min_value=0))
+        if random.getrandbits(1):
+            schema["maxLength"] = draw(st.integers(min_value=schema.get("minLength", 0)))
+    else:  # For arrays:
+        if random.getrandbits(1):
+            schema["minLength"] = draw(st.integers(min_value=0))
+        if random.getrandbits(1):
+            schema["maxLength"] = draw(st.integers(min_value=schema.get("minLength", 0)))
+        schema["items_schema"] = draw(schema_strategy())
     return schema
 
 
@@ -277,3 +365,7 @@ def test_schema_inference(data, schema):
 
 
 # TODO: write a test that shows validate may return False (maybe a unit test!)
+@given(st.data(), st.just({'items_schema': {'type': 'array', 'items_schema': {'type': 'number'}}, 'minLength': 1, 'type': 'array'}))
+def test_validation(data, schema):
+    instance = data.draw(from_schema(schema))
+    assert validate(schema, instance)
